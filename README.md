@@ -36,13 +36,14 @@ Solo hace falta la clave del proveedor elegido. El archivo `.env` está en `.git
 
 ## Qué hace
 
-`main.py` tiene cuatro piezas:
+`main.py` tiene cinco piezas:
 
 | Pieza | Qué es |
 |---|---|
 | `prompt` | `ChatPromptTemplate.from_messages` con un mensaje `system`, un mensaje `human` y la variable `{pregunta}` |
-| `build_model()` | Devuelve `ChatOpenAI` o `ChatAnthropic` según `LLM_PROVIDER`, con modelo y `temperature` configurados |
-| `build_chain()` | Compone `prompt \| model \| StrOutputParser()` con el operador `\|` |
+| `model` | `ChatOpenAI` o `ChatAnthropic` según `LLM_PROVIDER`, con modelo y `temperature` configurados (lo crea `build_model()`) |
+| `parser` | `StrOutputParser()` |
+| `chain` | `prompt \| model \| parser`, compuesta con el operador `\|` |
 | `main()` | Corrutina que ejecuta la cadena con `await chain.ainvoke({"pregunta": ...})` e imprime el texto |
 
 El recorrido de los datos dentro de la cadena es:
@@ -55,9 +56,9 @@ El recorrido de los datos dentro de la cadena es:
 
 | Criterio | Dónde está en `main.py` |
 |---|---|
-| Flujo principal solo con sintaxis LCEL (`\|`) | `build_chain()`: `prompt \| model \| StrOutputParser()` |
+| Flujo principal solo con sintaxis LCEL (`\|`) | `chain = prompt \| model \| parser` |
 | Ejecución asíncrona | `main()`: `await chain.ainvoke({"pregunta": pregunta})` |
-| Salida en texto plano | Último eslabón `StrOutputParser()`; `main()` imprime un `str` |
+| Salida en texto plano | Último eslabón `parser = StrOutputParser()`; `main()` imprime un `str` |
 | `ChatPromptTemplate` con roles System/Human | `prompt`, definido con `from_messages` |
 
 Los dos errores comunes que menciona la consigna están cubiertos: la llamada usa `await`, y la clave del diccionario (`pregunta`) coincide con la variable del prompt (`{pregunta}`).
@@ -85,11 +86,11 @@ Si la API falla (clave inválida, límite de tasa o red), se imprime una línea 
 pytest
 ```
 
-Son 9 tests y tardan unos 2 segundos. No usan la red ni claves: el modelo se reemplaza por `FakeListChatModel`, el modelo falso que trae LangChain.
+Son 10 tests y tardan unos 2 segundos. No usan la red ni claves: el modelo se reemplaza por `FakeListChatModel`, el modelo falso que trae LangChain.
 
 | Test | Qué comprueba |
 |---|---|
-| `test_la_cadena_es_prompt_modelo_parser_compuesta_con_lcel` | La cadena es un `RunnableSequence` con prompt, modelo y parser en ese orden |
+| `test_la_cadena_es_prompt_modelo_parser_compuesta_con_lcel` | `chain` es un `RunnableSequence` con `prompt`, `model` y `parser` en ese orden |
 | `test_ainvoke_devuelve_texto_plano_y_no_un_mensaje` | `await chain.ainvoke(...)` devuelve un `str` |
 | `test_el_prompt_tiene_roles_system_y_human_y_la_variable_pregunta` | El prompt genera un `SystemMessage` y un `HumanMessage` |
 | `test_una_clave_que_no_coincide_con_el_prompt_falla` | Un diccionario con otra clave produce un `KeyError` |
@@ -97,9 +98,11 @@ Son 9 tests y tardan unos 2 segundos. No usan la red ni claves: el modelo se ree
 | `test_main_imprime_la_respuesta_como_texto` | `main()` imprime y devuelve el texto |
 | `test_main_sin_clave_informa_y_no_se_rompe` | Sin clave no hay excepción (un caso por proveedor) |
 | `test_main_informa_un_fallo_de_la_api_sin_traceback` | Un fallo del modelo termina en una línea `[ERROR]` |
+| `test_el_modulo_se_importa_sin_la_integracion_del_otro_proveedor` | Con OpenAI, `main.py` se importa aunque `langchain-anthropic` no esté instalado |
 
 ## Decisiones de diseño
 
 - **Modelo de Anthropic elegido por la `temperature`.** La consigna pide configurar `temperature`, así que `ChatOpenAI` y `ChatAnthropic` se crean con `temperature=0.2`. Para cumplirlo en Anthropic el modelo por defecto es `claude-haiku-4-5`, que acepta ese parámetro. Los modelos Claude más recientes (por ejemplo `claude-opus-5-5`) ya no lo usan: regulan solos la variabilidad de la respuesta y rechazan `temperature` con un error 400. Con uno de esos modelos en `ANTHROPIC_MODEL`, el script informa ese error en una línea `[ERROR]`.
-- **El modelo se crea dentro de una función.** `ChatOpenAI` falla al construirse si no hay clave; al crearlo en `build_model()` y no al importar el módulo, `main.py` se puede importar y testear sin credenciales.
+- **El módulo se importa sin credenciales.** `ChatOpenAI` falla al construirse si no recibe una clave. Cuando la variable de entorno no está definida, el modelo se crea con un valor de relleno, así `main.py` y su `chain` se pueden importar y testear; `main()` verifica la variable antes de llamar a la API.
+- **Una sola integración instalada alcanza.** `langchain_openai` y `langchain_anthropic` se importan dentro de `build_model()`, solo la del proveedor elegido.
 - **`astream` y `abatch`.** Por ser una cadena LCEL, la misma `chain` admite `chain.astream(...)` para recibir la respuesta en fragmentos y `chain.abatch([...])` para procesar varias preguntas a la vez, sin cambiar su definición.

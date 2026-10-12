@@ -3,7 +3,11 @@
 Ejecutar con: pytest
 """
 
+import importlib
+import sys
+
 import pytest
+from langchain_core.language_models import BaseChatModel
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.output_parsers import StrOutputParser
@@ -21,19 +25,20 @@ def modelo_falso() -> FakeListChatModel:
     return FakeListChatModel(responses=[RESPUESTA])
 
 
+def cadena_falsa():
+    return main.prompt | modelo_falso() | main.parser
+
+
 async def test_la_cadena_es_prompt_modelo_parser_compuesta_con_lcel():
-    modelo = modelo_falso()
-
-    chain = main.build_chain(modelo)
-
-    assert isinstance(chain, RunnableSequence)
-    assert isinstance(chain.steps[0], ChatPromptTemplate)
-    assert chain.steps[1] is modelo
-    assert isinstance(chain.steps[2], StrOutputParser)
+    assert isinstance(main.chain, RunnableSequence)
+    assert main.chain.steps == [main.prompt, main.model, main.parser]
+    assert isinstance(main.prompt, ChatPromptTemplate)
+    assert isinstance(main.model, BaseChatModel)
+    assert isinstance(main.parser, StrOutputParser)
 
 
 async def test_ainvoke_devuelve_texto_plano_y_no_un_mensaje():
-    respuesta = await main.build_chain(modelo_falso()).ainvoke({"pregunta": "¿Qué es la entropía?"})
+    respuesta = await cadena_falsa().ainvoke({"pregunta": "¿Qué es la entropía?"})
 
     assert isinstance(respuesta, str)
     assert respuesta == RESPUESTA
@@ -50,7 +55,7 @@ async def test_el_prompt_tiene_roles_system_y_human_y_la_variable_pregunta():
 
 async def test_una_clave_que_no_coincide_con_el_prompt_falla():
     with pytest.raises(KeyError):
-        await main.build_chain(modelo_falso()).ainvoke({"question": "¿Qué es la entropía?"})
+        await cadena_falsa().ainvoke({"question": "¿Qué es la entropía?"})
 
 
 async def test_build_model_configura_modelo_y_temperature(monkeypatch):
@@ -69,7 +74,7 @@ async def test_build_model_configura_modelo_y_temperature(monkeypatch):
 async def test_main_imprime_la_respuesta_como_texto(monkeypatch, capsys):
     monkeypatch.setenv("LLM_PROVIDER", "openai")
     monkeypatch.setenv("OPENAI_API_KEY", "clave-de-prueba")
-    monkeypatch.setattr(main, "build_model", modelo_falso)
+    monkeypatch.setattr(main, "chain", cadena_falsa())
 
     respuesta = await main.main()
 
@@ -89,7 +94,17 @@ async def test_main_sin_clave_informa_y_no_se_rompe(monkeypatch, capsys, provide
 async def test_main_informa_un_fallo_de_la_api_sin_traceback(monkeypatch, capsys):
     monkeypatch.setenv("LLM_PROVIDER", "openai")
     monkeypatch.setenv("OPENAI_API_KEY", "clave-de-prueba")
-    monkeypatch.setattr(main, "build_model", lambda: FakeListChatModel(responses=[]))
+    monkeypatch.setattr(main, "chain", main.prompt | FakeListChatModel(responses=[]) | main.parser)
 
     assert await main.main() is None
     assert "[ERROR]" in capsys.readouterr().out
+
+
+async def test_el_modulo_se_importa_sin_la_integracion_del_otro_proveedor(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setitem(sys.modules, "langchain_anthropic", None)  # simula que no está instalada
+
+    recargado = importlib.reload(main)
+
+    assert isinstance(recargado.chain, RunnableSequence)
